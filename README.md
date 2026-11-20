@@ -10,9 +10,10 @@
 
 ## Architecture & Principles
 
-- **100% Server-Sided**: Operates purely on the server. Clients do not need RealWeather installed; vanilla Minecraft client weather synchronization automatically displays weather updates.
-- **Zero Client Overhead**: No custom client renderers, no particle injectors, no client mixins, and no client-side dependencies.
-- **Daytime Thunderstorm Sleep Restriction**: Prevents players from sleeping during daytime thunderstorms with a descriptive overlay message: *"You cannot sleep during a real-world thunderstorm."* Nighttime sleep is always preserved.
+- **100% Server-Sided & Mixin-Free**: Operates purely on the server without any bytecode injection or mixins. Seamlessly compatible with optimization mods (such as Lithium or FerriteCore) and custom server distributions. Clients do not need RealWeather installed; native Minecraft client weather synchronization automatically displays weather updates.
+- **Zero Client Overhead**: No custom client renderers, no particle injectors, and no client-side dependencies.
+- **Periodic Weather Enforcement**: Evaluates the Overworld's actual weather against the active RealWeather target once every 20 server ticks (~1 second). If a mismatch occurs (e.g., from `/weather`, players sleeping through the night, natural vanilla transitions, or other server modifications), RealWeather cleanly detects the divergence and restores the target weather without per-tick CPU overhead.
+- **Unrestricted Sleeping**: Players can sleep according to standard vanilla Minecraft mechanics. When sleeping resets the weather cycle, periodic enforcement restores the synchronized real-world weather within 1 second.
 - **Vanilla Mechanics**: Biome temperature and any external seasons mod determine whether precipitation falls as rain or snow according to native Minecraft rules.
 - **Overworld Exclusivity**: Weather synchronization applies strictly to the Overworld (`minecraft:overworld`). The Nether and The End remain untouched.
 - **Asynchronous & Non-Blocking**: Open-Meteo requests execute asynchronously via Java 25 `HttpClient` without blocking server ticks.
@@ -22,18 +23,26 @@
 
 ---
 
-## Weather Mapping & Sleep Behaviour
+## Weather Mapping & Periodic Enforcement
 
-| Time | Real-World Condition | Minecraft Weather | Sleeping Behaviour |
-|---|---|---|---|
-| **Daytime** | Clear / Clouds / Overcast / Fog | `CLEAR` | Normal vanilla behaviour |
-| **Daytime** | Rain / Drizzle / Snow | `RAIN` | Normal vanilla behaviour |
-| **Daytime** | Thunderstorm | `THUNDERSTORM` | **Denied**: *"You cannot sleep during a real-world thunderstorm."* |
-| **Nighttime** | Clear / Clouds / Overcast / Fog | `CLEAR` | Allowed (vanilla validation) |
-| **Nighttime** | Rain / Drizzle / Snow | `RAIN` | Allowed (vanilla validation) |
-| **Nighttime** | Thunderstorm | `THUNDERSTORM` | Allowed (vanilla validation) |
+### Weather Condition Mapping
 
-> Cloud cover and fog are never treated as precipitation.
+| Real-World Condition (Open-Meteo) | Minecraft Weather State | In-Game Behaviour |
+|---|---|---|
+| Clear, mainly clear, partly cloudy, cloudy, overcast, fog | `CLEAR` | Clear skies. Cloud cover and fog are never treated as precipitation. |
+| Drizzle, rain, heavy rain, snowfall, freezing rain | `RAIN` | Rain in temperate biomes; snowfall in cold/high-altitude biomes. |
+| Thunderstorms (slight, moderate, severe) | `THUNDERSTORM` | Thunderstorm with lightning. Snowfall in cold biomes. |
+
+### Periodic Enforcement Behaviour
+
+RealWeather maintains control over the Overworld weather through a lightweight periodic check:
+
+- **20-Tick Frequency (1 Hz)**: The enforcement check runs once every 20 Overworld server ticks rather than every tick, reducing coordinator evaluations by 95% while keeping enforcement responsive.
+- **Divergence Detection**: Compares the Overworld's actual `isRaining()` and `isThundering()` state with the target RealWeather condition.
+- **Non-Invasive Corrections**:
+  - **Manual Commands**: Vanilla commands like `/weather clear`, `/weather rain`, or `/weather thunder` are permitted to execute natively without mixin cancellations; RealWeather restores the real-world condition on the next periodic cycle.
+  - **Sleeping**: Players can sleep through storms and nighttime without restriction. When morning arrives and clears the storm, RealWeather restores the synchronized weather state within 20 ticks (~1 second).
+  - **Vanilla Inactivity**: When RealWeather is disabled via `/realweather disable` or `"enabled": false`, enforcement halts immediately and native Minecraft weather cycles run unhindered.
 
 ---
 
