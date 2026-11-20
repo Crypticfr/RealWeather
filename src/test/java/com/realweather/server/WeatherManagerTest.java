@@ -16,9 +16,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class WeatherManagerTest {
 
     private static class MockWeatherProvider implements WeatherProvider {
+        private final java.util.Queue<CompletableFuture<WeatherSnapshot>> queuedResults = new java.util.concurrent.ConcurrentLinkedQueue<>();
         private CompletableFuture<WeatherSnapshot> nextResult = new CompletableFuture<>();
         private WeatherSnapshot cachedSnapshot = null;
         private boolean lastForceRefresh = false;
+        private final java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
         @Override
         public String getId() {
@@ -38,7 +40,9 @@ class WeatherManagerTest {
         @Override
         public CompletableFuture<WeatherSnapshot> getCurrentWeather(double latitude, double longitude, boolean forceRefresh) {
             this.lastForceRefresh = forceRefresh;
-            return nextResult;
+            callCount.incrementAndGet();
+            CompletableFuture<WeatherSnapshot> queued = queuedResults.poll();
+            return queued != null ? queued : nextResult;
         }
 
         @Override
@@ -329,5 +333,163 @@ class WeatherManagerTest {
         WeatherState state = manager.syncWeather(null, config, false).get();
         assertEquals(WeatherState.SyncStatus.IDLE, state.getSyncStatus());
         assertFalse(provider.nextResult.isDone());
+    }
+
+    @Test
+    @DisplayName("Regression: /realweather reload during in-flight request invalidates it and performs fresh sync")
+    void testReloadDuringInFlightRequestPerformsFreshSync() throws Exception {
+        MockWeatherProvider provider = new MockWeatherProvider();
+        CompletableFuture<WeatherSnapshot> firstRequestFuture = new CompletableFuture<>();
+        CompletableFuture<WeatherSnapshot> secondRequestFuture = new CompletableFuture<>();
+        provider.queuedResults.add(firstRequestFuture);
+        provider.queuedResults.add(secondRequestFuture);
+
+        WeatherController controller = new WeatherController();
+        WeatherManager manager = new WeatherManager(provider, controller);
+
+        WeatherConfig config = new WeatherConfig();
+        config.setLocationName("London");
+        config.setLatitude(51.5074);
+        config.setLongitude(-0.1278);
+        config.setEnabled(true);
+
+        // 1. Initial request starts (in flight)
+        CompletableFuture<WeatherState> firstSyncFuture = manager.syncWeather(null, config, false);
+        assertTrue(manager.isSyncing(), "Manager must be syncing while first request is in flight");
+        assertEquals(1, provider.callCount.get(), "Provider should have received 1 request");
+
+        // 2. User reloads config while first request is still in flight (e.g. coordinates changed to Paris)
+        manager.invalidateInFlight();
+        assertFalse(manager.isSyncing(), "isSyncing must be false after invalidating in-flight generation");
+
+        config.setLocationName("Paris");
+        config.setLatitude(48.8566);
+        config.setLongitude(2.3522);
+
+        // 3. Post-reload sync is triggered immediately
+        CompletableFuture<WeatherState> secondSyncFuture = manager.syncWeather(null, config, true);
+        assertTrue(manager.isSyncing(), "Manager must be syncing for the new post-reload generation");
+        assertEquals(2, provider.callCount.get(), "Second request must be dispatched without being blocked by old request");
+
+        // 4. Old request completes now with London data
+        Instant now = Instant.now();
+        firstRequestFuture.complete(new WeatherSnapshot(
+                51.5074, -0.1278,
+                61, 10.0, null, null, 2.0, 2.0, 0.0, 0.0, 90.0, null, null, now, "UTC", now
+        ));
+        WeatherState firstState = firstSyncFuture.get();
+
+        // Old request must be dropped and must not update state or reset isSyncing for the active second request
+        assertTrue(firstState.getLatestSnapshot().isEmpty(), "Old request data must not be stored");
+        assertTrue(manager.isSyncing(), "Completing invalidated old request must not reset isSyncing for active request");
+
+        // 5. New post-reload request completes with Paris data
+        secondRequestFuture.complete(new WeatherSnapshot(
+                48.8566, 2.3522,
+                0, 25.0, null, null, 0.0, 0.0, 0.0, 0.0, 10.0, null, null, now, "UTC", now
+        ));
+        WeatherState secondState = secondSyncFuture.get();
+
+        // Fresh request data must be applied
+        assertEquals(WeatherState.SyncStatus.SUCCESS, secondState.getSyncStatus());
+        assertEquals(WeatherCondition.CLEAR, secondState.getCurrentAppliedCondition());
+        assertEquals(25.0, secondState.getLatestSnapshot().orElseThrow().getTemperature());
+        assertEquals(48.8566, secondState.getLatestSnapshot().orElseThrow().getLatitude());
+        assertFalse(manager.isSyncing(), "Manager isSyncing must be false once active request completes");
+    }
+
+    @Test
+    @DisplayName("Regression: /realweather enable after invalidation during in-flight request starts fresh sync")
+    void testEnableAfterInvalidationDuringInFlightRequestStartsFreshSync() throws Exception {
+        MockWeatherProvider provider = new MockWeatherProvider();
+        CompletableFuture<WeatherSnapshot> firstRequestFuture = new CompletableFuture<>();
+        CompletableFuture<WeatherSnapshot> secondRequestFuture = new CompletableFuture<>();
+        provider.queuedResults.add(firstRequestFuture);
+        provider.queuedResults.add(secondRequestFuture);
+
+        WeatherController controller = new WeatherController();
+        WeatherManager manager = new WeatherManager(provider, controller);
+
+        WeatherConfig config = new WeatherConfig();
+        config.setLatitude(51.5074);
+        config.setLongitude(-0.1278);
+        config.setEnabled(true);
+
+        // 1. Initial sync starts
+        CompletableFuture<WeatherState> firstSync = manager.syncWeather(null, config, false);
+        assertTrue(manager.isSyncing());
+        assertEquals(1, provider.callCount.get());
+
+        // 2. Mod disabled while first request is in flight
+        manager.invalidateInFlight();
+        config.setEnabled(false);
+
+        // 3. Mod immediately re-enabled (e.g. /realweather enable)
+        manager.invalidateInFlight();
+        config.setEnabled(true);
+        CompletableFuture<WeatherState> secondSync = manager.syncWeather(null, config, true);
+
+        assertEquals(2, provider.callCount.get(), "Re-enabling must trigger a fresh request");
+        assertTrue(manager.isSyncing());
+
+        // 4. Old request finishes with THUNDERSTORM
+        Instant now = Instant.now();
+        firstRequestFuture.complete(new WeatherSnapshot(
+                51.5074, -0.1278,
+                95, 18.0, null, null, 10.0, 10.0, 0.0, 0.0, 100.0, null, null, now, "UTC", now
+        ));
+        firstSync.get();
+        assertNotEquals(WeatherCondition.THUNDERSTORM, manager.getWeatherState().getCurrentAppliedCondition(),
+                "Stale request must not apply thunderstorm");
+        assertTrue(manager.isSyncing(), "Old request completion must not clear active status of re-enabled request");
+
+        // 5. Fresh re-enabled request finishes with CLEAR
+        secondRequestFuture.complete(new WeatherSnapshot(
+                51.5074, -0.1278,
+                0, 22.0, null, null, 0.0, 0.0, 0.0, 0.0, 5.0, null, null, now, "UTC", now
+        ));
+        secondSync.get();
+        assertEquals(WeatherCondition.CLEAR, manager.getWeatherState().getCurrentAppliedCondition());
+        assertFalse(manager.isSyncing());
+    }
+
+    @Test
+    @DisplayName("Regression: Overlapping sync requests for the same active generation are safely rejected")
+    void testOverlappingSyncRejectedForSameGeneration() {
+        MockWeatherProvider provider = new MockWeatherProvider();
+        CompletableFuture<WeatherSnapshot> inFlightFuture = new CompletableFuture<>();
+        provider.queuedResults.add(inFlightFuture);
+
+        WeatherController controller = new WeatherController();
+        WeatherManager manager = new WeatherManager(provider, controller);
+
+        WeatherConfig config = new WeatherConfig();
+        config.setEnabled(true);
+
+        // 1. First sync starts
+        CompletableFuture<WeatherState> sync1 = manager.syncWeather(null, config, false);
+        assertTrue(manager.isSyncing());
+        assertEquals(1, provider.callCount.get());
+
+        // 2. Overlapping sync attempted while first is in flight
+        CompletableFuture<WeatherState> sync2 = manager.syncWeather(null, config, false);
+        assertEquals(1, provider.callCount.get(), "Overlapping call must be skipped without dispatching new request");
+        assertTrue(sync2.isDone(), "Overlapping call should return an immediately completed future");
+
+        // 3. Complete first sync
+        Instant now = Instant.now();
+        inFlightFuture.complete(new WeatherSnapshot(
+                51.5074, -0.1278,
+                0, 20.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        sync1.join();
+        assertFalse(manager.isSyncing());
+
+        // 4. Now another sync can proceed normally
+        CompletableFuture<WeatherSnapshot> subsequentFuture = new CompletableFuture<>();
+        provider.queuedResults.add(subsequentFuture);
+        CompletableFuture<WeatherState> sync3 = manager.syncWeather(null, config, false);
+        assertEquals(2, provider.callCount.get(), "Subsequent sync after completion must dispatch normally");
+        assertTrue(manager.isSyncing());
     }
 }

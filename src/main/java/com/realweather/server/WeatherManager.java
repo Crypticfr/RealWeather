@@ -13,7 +13,6 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class WeatherManager {
@@ -22,8 +21,9 @@ public class WeatherManager {
     private final WeatherProvider weatherProvider;
     private final WeatherController weatherController;
     private final WeatherState weatherState;
-    private final AtomicBoolean isSyncing = new AtomicBoolean(false);
+    private final Object syncLock = new Object();
     private final AtomicLong syncGeneration = new AtomicLong(0);
+    private final AtomicLong activeSyncGeneration = new AtomicLong(-1);
 
     public WeatherManager(WeatherProvider weatherProvider, WeatherController weatherController) {
         this.weatherProvider = Objects.requireNonNull(weatherProvider, "weatherProvider cannot be null");
@@ -32,9 +32,11 @@ public class WeatherManager {
     }
 
     public long invalidateInFlight() {
-        long newGen = syncGeneration.incrementAndGet();
-        LOGGER.debug("Invalidated in-flight weather requests, new generation: {}", newGen);
-        return newGen;
+        synchronized (syncLock) {
+            long newGen = syncGeneration.incrementAndGet();
+            LOGGER.debug("Invalidated in-flight weather requests, new generation: {}", newGen);
+            return newGen;
+        }
     }
 
     public long getSyncGeneration() {
@@ -47,12 +49,18 @@ public class WeatherManager {
             return CompletableFuture.completedFuture(weatherState);
         }
 
-        if (!isSyncing.compareAndSet(false, true)) {
-            LOGGER.debug("Synchronization already in progress, skipping overlapping request");
-            return CompletableFuture.completedFuture(weatherState);
+        final long currentGen;
+        synchronized (syncLock) {
+            long currentActive = activeSyncGeneration.get();
+            long currentTarget = syncGeneration.get();
+            if (currentActive != -1 && currentActive == currentTarget) {
+                LOGGER.debug("Synchronization already in progress for generation {}, skipping overlapping request", currentTarget);
+                return CompletableFuture.completedFuture(weatherState);
+            }
+            currentGen = syncGeneration.incrementAndGet();
+            activeSyncGeneration.set(currentGen);
         }
 
-        final long currentGen = syncGeneration.incrementAndGet();
         final double requestLat = config.getLatitude();
         final double requestLon = config.getLongitude();
 
@@ -148,7 +156,7 @@ public class WeatherManager {
 
                     return weatherState;
                 })
-                .whenComplete((state, err) -> isSyncing.set(false));
+                .whenComplete((state, err) -> activeSyncGeneration.compareAndSet(currentGen, -1));
     }
 
     public WeatherState getWeatherState() {
@@ -164,6 +172,7 @@ public class WeatherManager {
     }
 
     public boolean isSyncing() {
-        return isSyncing.get();
+        long active = activeSyncGeneration.get();
+        return active != -1 && active == syncGeneration.get();
     }
 }

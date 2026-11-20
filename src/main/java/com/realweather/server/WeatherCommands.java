@@ -101,6 +101,7 @@ public final class WeatherCommands {
     private static int executeRefresh(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         RealWeather mod = RealWeather.getInstance();
+        mod.getWeatherManager().invalidateInFlight();
         source.sendSuccess(() -> Component.literal("§eTriggering immediate weather refresh..."), true);
         mod.getWeatherScheduler().triggerSync(true);
         return 1;
@@ -119,6 +120,7 @@ public final class WeatherCommands {
     private static int executeEnable(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         RealWeather mod = RealWeather.getInstance();
+        mod.getWeatherManager().invalidateInFlight();
         WeatherConfig config = mod.getConfigManager().getConfig();
         config.setEnabled(true);
         mod.getConfigManager().saveConfig();
