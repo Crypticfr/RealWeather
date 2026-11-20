@@ -6,6 +6,7 @@ import com.realweather.server.WeatherCommands;
 import com.realweather.server.WeatherController;
 import com.realweather.server.WeatherManager;
 import com.realweather.server.WeatherScheduler;
+import com.realweather.server.WeatherSleepHandler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -47,6 +48,9 @@ public class RealWeather implements ModInitializer {
 
         // Register server commands
         CommandRegistrationCallback.EVENT.register(WeatherCommands::register);
+
+        // Register daytime thunderstorm sleep restriction
+        WeatherSleepHandler.register();
 
         var config = configManager.getConfig();
         LOGGER.info("{} initialized. Location: {} [lat: {}, lon: {}], interval: {} min, enabled: {}",

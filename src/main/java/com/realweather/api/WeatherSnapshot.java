@@ -5,6 +5,8 @@ import java.util.Objects;
 import java.util.OptionalDouble;
 
 public final class WeatherSnapshot {
+    private final double latitude;
+    private final double longitude;
     private final int weatherCode;
     private final double temperature;
     private final Double apparentTemperature;
@@ -19,6 +21,63 @@ public final class WeatherSnapshot {
     private final Instant observationTime;
     private final String timezone;
     private final Instant fetchTime;
+
+    public WeatherSnapshot(
+            double latitude,
+            double longitude,
+            int weatherCode,
+            double temperature,
+            Double apparentTemperature,
+            Double relativeHumidity,
+            double precipitation,
+            double rain,
+            double showers,
+            double snowfall,
+            double cloudCover,
+            Double windSpeed,
+            Double windDirection,
+            Instant observationTime,
+            String timezone,
+            Instant fetchTime
+    ) {
+        if (Double.isNaN(latitude) || Double.isInfinite(latitude) || latitude < -90.0 || latitude > 90.0) {
+            throw new IllegalArgumentException("Latitude must be a finite number between -90.0 and 90.0. Provided: " + latitude);
+        }
+        if (Double.isNaN(longitude) || Double.isInfinite(longitude) || longitude < -180.0 || longitude > 180.0) {
+            throw new IllegalArgumentException("Longitude must be a finite number between -180.0 and 180.0. Provided: " + longitude);
+        }
+        if (weatherCode < 0) {
+            throw new IllegalArgumentException("Weather code cannot be negative: " + weatherCode);
+        }
+        if (precipitation < 0.0) {
+            throw new IllegalArgumentException("Precipitation cannot be negative: " + precipitation);
+        }
+        if (rain < 0.0) {
+            throw new IllegalArgumentException("Rain cannot be negative: " + rain);
+        }
+        if (showers < 0.0) {
+            throw new IllegalArgumentException("Showers cannot be negative: " + showers);
+        }
+        if (snowfall < 0.0) {
+            throw new IllegalArgumentException("Snowfall cannot be negative: " + snowfall);
+        }
+        this.latitude = latitude;
+        this.longitude = longitude;
+        this.weatherCode = weatherCode;
+        this.temperature = temperature;
+        this.apparentTemperature = apparentTemperature;
+        this.relativeHumidity = relativeHumidity;
+        this.precipitation = precipitation;
+        this.rain = rain;
+        this.showers = showers;
+        this.snowfall = snowfall;
+        this.cloudCover = Math.max(0.0, Math.min(100.0, cloudCover));
+        this.windSpeed = windSpeed;
+        this.windDirection = windDirection;
+        this.observationTime = Objects.requireNonNull(observationTime, "observationTime cannot be null");
+        this.timezone = Objects.requireNonNull(timezone, "timezone cannot be null");
+        this.fetchTime = Objects.requireNonNull(fetchTime, "fetchTime cannot be null");
+    }
 
     public WeatherSnapshot(
             int weatherCode,
@@ -36,35 +95,22 @@ public final class WeatherSnapshot {
             String timezone,
             Instant fetchTime
     ) {
-        if (weatherCode < 0) {
-            throw new IllegalArgumentException("Weather code cannot be negative: " + weatherCode);
-        }
-        if (precipitation < 0.0) {
-            throw new IllegalArgumentException("Precipitation cannot be negative: " + precipitation);
-        }
-        if (rain < 0.0) {
-            throw new IllegalArgumentException("Rain cannot be negative: " + rain);
-        }
-        if (showers < 0.0) {
-            throw new IllegalArgumentException("Showers cannot be negative: " + showers);
-        }
-        if (snowfall < 0.0) {
-            throw new IllegalArgumentException("Snowfall cannot be negative: " + snowfall);
-        }
-        this.weatherCode = weatherCode;
-        this.temperature = temperature;
-        this.apparentTemperature = apparentTemperature;
-        this.relativeHumidity = relativeHumidity;
-        this.precipitation = precipitation;
-        this.rain = rain;
-        this.showers = showers;
-        this.snowfall = snowfall;
-        this.cloudCover = Math.max(0.0, Math.min(100.0, cloudCover));
-        this.windSpeed = windSpeed;
-        this.windDirection = windDirection;
-        this.observationTime = Objects.requireNonNull(observationTime, "observationTime cannot be null");
-        this.timezone = Objects.requireNonNull(timezone, "timezone cannot be null");
-        this.fetchTime = Objects.requireNonNull(fetchTime, "fetchTime cannot be null");
+        this(0.0, 0.0, weatherCode, temperature, apparentTemperature, relativeHumidity,
+                precipitation, rain, showers, snowfall, cloudCover, windSpeed, windDirection,
+                observationTime, timezone, fetchTime);
+    }
+
+    public double getLatitude() {
+        return latitude;
+    }
+
+    public double getLongitude() {
+        return longitude;
+    }
+
+    public boolean matchesLocation(double lat, double lon) {
+        return WeatherCache.CoordinateKey.of(this.latitude, this.longitude)
+                .equals(WeatherCache.CoordinateKey.of(lat, lon));
     }
 
     public int getWeatherCode() {
@@ -127,7 +173,9 @@ public final class WeatherSnapshot {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof WeatherSnapshot that)) return false;
-        return weatherCode == that.weatherCode &&
+        return Double.compare(that.latitude, latitude) == 0 &&
+                Double.compare(that.longitude, longitude) == 0 &&
+                weatherCode == that.weatherCode &&
                 Double.compare(that.temperature, temperature) == 0 &&
                 Double.compare(that.precipitation, precipitation) == 0 &&
                 Double.compare(that.rain, rain) == 0 &&
@@ -145,15 +193,17 @@ public final class WeatherSnapshot {
 
     @Override
     public int hashCode() {
-        return Objects.hash(weatherCode, temperature, apparentTemperature, relativeHumidity,
-                precipitation, rain, showers, snowfall, cloudCover, windSpeed, windDirection,
-                observationTime, timezone, fetchTime);
+        return Objects.hash(latitude, longitude, weatherCode, temperature, apparentTemperature,
+                relativeHumidity, precipitation, rain, showers, snowfall, cloudCover,
+                windSpeed, windDirection, observationTime, timezone, fetchTime);
     }
 
     @Override
     public String toString() {
         return "WeatherSnapshot{" +
-                "weatherCode=" + weatherCode +
+                "latitude=" + latitude +
+                ", longitude=" + longitude +
+                ", weatherCode=" + weatherCode +
                 ", temperature=" + temperature + "°C" +
                 ", apparent=" + (apparentTemperature != null ? apparentTemperature + "°C" : "N/A") +
                 ", humidity=" + (relativeHumidity != null ? relativeHumidity + "%" : "N/A") +

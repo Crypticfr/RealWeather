@@ -29,6 +29,10 @@ public class WeatherApiException extends Exception {
         return statusCode;
     }
 
+    public int getHttpStatus() {
+        return statusCode;
+    }
+
     public Optional<Duration> getRetryAfter() {
         return Optional.ofNullable(retryAfter);
     }

@@ -13,6 +13,7 @@ import net.minecraft.network.chat.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 
 public final class WeatherCommands {
@@ -53,20 +54,35 @@ public final class WeatherCommands {
 
         source.sendSuccess(() -> Component.literal("§6=== RealWeather Status ==="), false);
         source.sendSuccess(() -> Component.literal("§7Status: " + (config.isEnabled() ? "§aEnabled" : "§cDisabled")), false);
-        source.sendSuccess(() -> Component.literal(String.format("§7Location: §f%s §7(%.4f, %.4f)",
+        source.sendSuccess(() -> Component.literal(String.format(Locale.ROOT, "§7Location: §f%s §7(lat: %.4f, lon: %.4f)",
                 config.getLocationName(), config.getLatitude(), config.getLongitude())), false);
 
-        Optional<WeatherSnapshot> snapshot = state.getLatestSnapshot();
-        if (snapshot.isPresent()) {
-            WeatherSnapshot s = snapshot.get();
-            source.sendSuccess(() -> Component.literal(String.format("§7Real-World: §e%s §7(Code: %d, Temp: %.1f°C, Cloud: %.0f%%, Precip: %.1fmm)",
-                    state.getDesiredCondition(), s.getWeatherCode(), s.getTemperature(), s.getCloudCover(), s.getPrecipitation())), false);
+        Optional<WeatherSnapshot> snapshotOpt = state.getLatestSnapshot();
+        if (snapshotOpt.isPresent() && snapshotOpt.get().matchesLocation(config.getLatitude(), config.getLongitude())) {
+            WeatherSnapshot s = snapshotOpt.get();
+            WeatherCondition condition = state.getDesiredCondition();
+            String windStr = s.getWindSpeed().isPresent()
+                    ? String.format(Locale.ROOT, "%.1f km/h", s.getWindSpeed().getAsDouble())
+                    : "N/A";
+            source.sendSuccess(() -> Component.literal(String.format(Locale.ROOT,
+                    "§7Real-World Weather: §e%s §7(WMO Code: %d, Temp: %.1f°C, Clouds: %.0f%%, Precip: %.1fmm, Wind: %s)",
+                    condition, s.getWeatherCode(), s.getTemperature(), s.getCloudCover(), s.getPrecipitation(), windStr)), false);
+        } else if (snapshotOpt.isPresent()) {
+            source.sendSuccess(() -> Component.literal("§7Real-World Weather: §eLocation changed. Pending refresh for current coordinates..."), false);
         } else {
-            source.sendSuccess(() -> Component.literal("§7Real-World: §cNo data received yet"), false);
+            source.sendSuccess(() -> Component.literal("§7Real-World Weather: §cNo data received yet"), false);
         }
 
         WeatherCondition currentWorld = manager.getWeatherController().getCurrentWorldCondition(source.getServer());
-        source.sendSuccess(() -> Component.literal("§7Minecraft Overworld: §b" + currentWorld), false);
+        String mcPrecipitationDesc;
+        if (currentWorld.isThunder()) {
+            mcPrecipitationDesc = "§cTHUNDERSTORM";
+        } else if (currentWorld.isPrecipitating()) {
+            mcPrecipitationDesc = "§9RAIN";
+        } else {
+            mcPrecipitationDesc = "§aCLEAR";
+        }
+        source.sendSuccess(() -> Component.literal("§7Minecraft Weather State: " + mcPrecipitationDesc), false);
 
         state.getLastSyncTimestamp().ifPresentOrElse(
                 time -> {
@@ -93,6 +109,7 @@ public final class WeatherCommands {
     private static int executeReload(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         RealWeather mod = RealWeather.getInstance();
+        mod.getWeatherManager().invalidateInFlight();
         mod.getConfigManager().loadConfig();
         source.sendSuccess(() -> Component.literal("§aRealWeather configuration reloaded."), true);
         mod.getWeatherScheduler().triggerSync(true);
@@ -113,6 +130,7 @@ public final class WeatherCommands {
     private static int executeDisable(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         RealWeather mod = RealWeather.getInstance();
+        mod.getWeatherManager().invalidateInFlight();
         WeatherConfig config = mod.getConfigManager().getConfig();
         config.setEnabled(false);
         mod.getConfigManager().saveConfig();

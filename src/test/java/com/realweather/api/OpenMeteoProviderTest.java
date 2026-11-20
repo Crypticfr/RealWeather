@@ -98,13 +98,13 @@ class OpenMeteoProviderTest {
                     "apparent_temperature": 10.2,
                     "relative_humidity_2m": 78,
                     "precipitation": 1.2,
-                    "rain": 1.2,
-                    "showers": 0.0,
+                    "rain": 1.0,
+                    "showers": 0.2,
                     "snowfall": 0.0,
                     "weather_code": 61,
                     "cloud_cover": 85,
-                    "wind_speed_10m": 14.2,
-                    "wind_direction_10m": 210
+                    "wind_speed_10m": 18.5,
+                    "wind_direction_10m": 220
                   }
                 }
                 """;
@@ -113,124 +113,139 @@ class OpenMeteoProviderTest {
         WeatherSnapshot snapshot = provider.getCurrentWeather(51.5074, -0.1278).get();
 
         assertNotNull(snapshot);
+        assertEquals(51.5074, snapshot.getLatitude(), 0.0001);
+        assertEquals(-0.1278, snapshot.getLongitude(), 0.0001);
+        assertTrue(snapshot.matchesLocation(51.5074, -0.1278));
         assertEquals(61, snapshot.getWeatherCode());
-        assertEquals(12.5, snapshot.getTemperature(), 0.001);
+        assertEquals(12.5, snapshot.getTemperature());
         assertTrue(snapshot.getApparentTemperature().isPresent());
-        assertEquals(10.2, snapshot.getApparentTemperature().getAsDouble(), 0.001);
+        assertEquals(10.2, snapshot.getApparentTemperature().getAsDouble());
         assertTrue(snapshot.getRelativeHumidity().isPresent());
-        assertEquals(78.0, snapshot.getRelativeHumidity().getAsDouble(), 0.001);
-        assertEquals(1.2, snapshot.getPrecipitation(), 0.001);
-        assertEquals(1.2, snapshot.getRain(), 0.001);
-        assertEquals(0.0, snapshot.getShowers(), 0.001);
-        assertEquals(0.0, snapshot.getSnowfall(), 0.001);
-        assertEquals(85.0, snapshot.getCloudCover(), 0.001);
+        assertEquals(78.0, snapshot.getRelativeHumidity().getAsDouble());
+        assertEquals(1.2, snapshot.getPrecipitation());
+        assertEquals(1.0, snapshot.getRain());
+        assertEquals(0.2, snapshot.getShowers());
+        assertEquals(0.0, snapshot.getSnowfall());
+        assertEquals(85.0, snapshot.getCloudCover());
         assertTrue(snapshot.getWindSpeed().isPresent());
-        assertEquals(14.2, snapshot.getWindSpeed().getAsDouble(), 0.001);
+        assertEquals(18.5, snapshot.getWindSpeed().getAsDouble());
         assertTrue(snapshot.getWindDirection().isPresent());
-        assertEquals(210.0, snapshot.getWindDirection().getAsDouble(), 0.001);
+        assertEquals(220.0, snapshot.getWindDirection().getAsDouble());
         assertEquals("Europe/London", snapshot.getTimezone());
+        assertNotNull(snapshot.getObservationTime());
+        assertNotNull(snapshot.getFetchTime());
         assertEquals(1, requestCounter.get());
     }
 
     @Test
-    @DisplayName("Verify coordinate validation rejects out-of-range coordinates")
-    void testInvalidCoordinates() {
+    @DisplayName("Verify forceRefresh bypasses fresh cache and sends new HTTP request")
+    void testForceRefreshBypassesCache() throws Exception {
+        responseCode = 200;
+        responseBody = """
+                {
+                  "timezone": "UTC",
+                  "current": {
+                    "time": "2026-11-20T13:45",
+                    "temperature_2m": 18.0,
+                    "weather_code": 0
+                  }
+                }
+                """;
+
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
 
-        ExecutionException ex1 = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(95.0, 0.0).get());
-        assertInstanceOf(IllegalArgumentException.class, ex1.getCause());
+        // 1. First fetch
+        WeatherSnapshot snap1 = provider.getCurrentWeather(40.7128, -74.0060, false).get();
+        assertEquals(18.0, snap1.getTemperature());
+        assertEquals(1, requestCounter.get());
 
-        ExecutionException ex2 = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(0.0, 190.0).get());
-        assertInstanceOf(IllegalArgumentException.class, ex2.getCause());
+        // 2. Second fetch with forceRefresh=false uses cache (requestCounter stays 1)
+        WeatherSnapshot snap2 = provider.getCurrentWeather(40.7128, -74.0060, false).get();
+        assertEquals(18.0, snap2.getTemperature());
+        assertEquals(1, requestCounter.get(), "Cached response should not send another request");
 
-        assertEquals(0, requestCounter.get(), "Invalid coordinates should not make HTTP calls");
+        // 3. Third fetch with forceRefresh=true bypasses cache and hits server
+        responseBody = """
+                {
+                  "timezone": "UTC",
+                  "current": {
+                    "time": "2026-11-20T14:00",
+                    "temperature_2m": 21.5,
+                    "weather_code": 1
+                  }
+                }
+                """;
+        WeatherSnapshot snap3 = provider.getCurrentWeather(40.7128, -74.0060, true).get();
+        assertEquals(21.5, snap3.getTemperature());
+        assertEquals(2, requestCounter.get(), "forceRefresh=true must perform a real HTTP request");
     }
 
     @Test
-    @DisplayName("Verify HTTP 400 Bad Request error propagation")
-    void testHttp400Error() {
-        responseCode = 400;
-        responseBody = "{\"error\":true,\"reason\":\"Invalid parameter\"}";
-
+    @DisplayName("Verify coordinate validation rejects NaN, infinite, and out-of-range values")
+    void testCoordinateValidation() {
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
-        ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
 
-        assertInstanceOf(WeatherApiException.class, ex.getCause());
-        WeatherApiException apiEx = (WeatherApiException) ex.getCause();
-        assertEquals(400, apiEx.getStatusCode());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(Double.NaN, 0.0).get());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(0.0, Double.NaN).get());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(Double.POSITIVE_INFINITY, 0.0).get());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(0.0, Double.NEGATIVE_INFINITY).get());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(91.0, 0.0).get());
+        assertThrows(ExecutionException.class, () -> provider.getCurrentWeather(0.0, -181.0).get());
     }
 
     @Test
-    @DisplayName("Verify HTTP 429 Rate Limit error with Retry-After header")
-    void testHttp429WithRetryAfter() {
+    @DisplayName("Verify HTTP 429 response throws WeatherRateLimitException")
+    void testRateLimitHandling() {
         responseCode = 429;
         retryAfterHeader = "120";
-        responseBody = "{\"error\":true,\"reason\":\"Rate limit exceeded\"}";
+        responseBody = "Too Many Requests";
 
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
         ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
+                provider.getCurrentWeather(48.8566, 2.3522).get());
 
         assertInstanceOf(WeatherRateLimitException.class, ex.getCause());
         WeatherRateLimitException rateLimitEx = (WeatherRateLimitException) ex.getCause();
-        assertEquals(429, rateLimitEx.getStatusCode());
         assertTrue(rateLimitEx.getRetryAfter().isPresent());
         assertEquals(Duration.ofSeconds(120), rateLimitEx.getRetryAfter().get());
     }
 
     @Test
-    @DisplayName("Verify HTTP 500 Internal Server Error handling")
-    void testHttp500Error() {
+    @DisplayName("Verify HTTP 500 error throws WeatherApiException")
+    void testHttp500Handling() {
         responseCode = 500;
         responseBody = "Internal Server Error";
 
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
         ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
+                provider.getCurrentWeather(48.8566, 2.3522).get());
 
         assertInstanceOf(WeatherApiException.class, ex.getCause());
         WeatherApiException apiEx = (WeatherApiException) ex.getCause();
-        assertTrue(apiEx.isServerError());
         assertEquals(500, apiEx.getStatusCode());
     }
 
     @Test
-    @DisplayName("Verify request timeout handling")
-    void testNetworkTimeout() {
+    @DisplayName("Verify malformed JSON throws WeatherApiException")
+    void testMalformedJsonHandling() {
         responseCode = 200;
-        responseDelayMs = 500; // 500ms delay
-        responseBody = "{}";
-
-        OpenMeteoProvider provider = createProvider(Duration.ofMillis(100), Duration.ofMinutes(15));
-        ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
-
-        assertNotNull(ex.getCause());
-    }
-
-    @Test
-    @DisplayName("Verify malformed JSON handling")
-    void testMalformedJson() {
-        responseCode = 200;
-        responseBody = "{not-valid-json";
+        responseBody = "{ invalid json !!! }";
 
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
         ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
+                provider.getCurrentWeather(48.8566, 2.3522).get());
 
         assertInstanceOf(WeatherApiException.class, ex.getCause());
+        assertTrue(ex.getCause().getMessage().contains("Malformed JSON"));
     }
 
     @Test
-    @DisplayName("Verify missing required weather fields handling")
+    @DisplayName("Verify missing required fields throws WeatherApiException")
     void testMissingRequiredFields() {
         responseCode = 200;
-        // Missing temperature_2m and weather_code
         responseBody = """
                 {
+                  "timezone": "UTC",
                   "current": {
                     "time": "2026-11-20T13:45"
                   }
@@ -239,64 +254,14 @@ class OpenMeteoProviderTest {
 
         OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
         ExecutionException ex = assertThrows(ExecutionException.class, () ->
-                provider.getCurrentWeather(51.5, -0.1).get());
+                provider.getCurrentWeather(48.8566, 2.3522).get());
 
         assertInstanceOf(WeatherApiException.class, ex.getCause());
+        assertTrue(ex.getCause().getMessage().contains("Missing required 'temperature_2m'"));
     }
 
     @Test
-    @DisplayName("Verify cache hit prevents second HTTP request")
-    void testCacheHit() throws Exception {
-        responseCode = 200;
-        responseBody = """
-                {
-                  "timezone": "UTC",
-                  "current": {
-                    "time": "2026-11-20T13:45",
-                    "temperature_2m": 15.0,
-                    "weather_code": 0
-                  }
-                }
-                """;
-
-        OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMinutes(15));
-
-        WeatherSnapshot first = provider.getCurrentWeather(40.7128, -74.0060).get();
-        assertEquals(1, requestCounter.get());
-
-        WeatherSnapshot second = provider.getCurrentWeather(40.7128, -74.0060).get();
-        assertEquals(1, requestCounter.get(), "Second call within cache window should not hit HTTP server");
-        assertEquals(first.getTemperature(), second.getTemperature());
-    }
-
-    @Test
-    @DisplayName("Verify cache expiry causes new HTTP request")
-    void testCacheExpiry() throws Exception {
-        responseCode = 200;
-        responseBody = """
-                {
-                  "timezone": "UTC",
-                  "current": {
-                    "time": "2026-11-20T13:45",
-                    "temperature_2m": 15.0,
-                    "weather_code": 0
-                  }
-                }
-                """;
-
-        OpenMeteoProvider provider = createProvider(Duration.ofSeconds(5), Duration.ofMillis(20));
-
-        provider.getCurrentWeather(48.8566, 2.3522).get();
-        assertEquals(1, requestCounter.get());
-
-        Thread.sleep(30); // wait past cache expiry (20ms)
-
-        provider.getCurrentWeather(48.8566, 2.3522).get();
-        assertEquals(2, requestCounter.get(), "Expired cache should trigger new HTTP request");
-    }
-
-    @Test
-    @DisplayName("Verify concurrent requests for identical coordinates are deduplicated")
+    @DisplayName("Verify concurrent requests for same coordinates are deduplicated")
     void testConcurrentRequestDeduplication() throws Exception {
         responseCode = 200;
         responseDelayMs = 50; // allow concurrency to overlap

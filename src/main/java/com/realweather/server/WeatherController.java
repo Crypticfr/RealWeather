@@ -6,7 +6,6 @@ import com.realweather.weather.WeatherCondition;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.saveddata.WeatherData;
 
 import java.util.Objects;
@@ -41,25 +40,31 @@ public class WeatherController {
         return Math.max(24000, updateIntervalMinutes * 60 * 20 * 2);
     }
 
+    /**
+     * Maps real-world WeatherCondition into exactly three Minecraft weather states:
+     * 1. CLEAR: Clear, mainly clear, partly cloudy, cloudy, overcast, fog
+     * 2. RAIN: Drizzle, rain, heavy rain, snowfall, freezing rain
+     * 3. THUNDERSTORM: Thunderstorms
+     */
     public static TargetWeather calculateTargetWeather(WeatherCondition condition, WeatherConfig config, int durationTicks) {
         Objects.requireNonNull(condition, "condition cannot be null");
         if (config == null || !config.isEnabled()) {
             return TargetWeather.clear(durationTicks);
         }
 
-        // Thunder synchronization
+        // Thunderstorm synchronization -> THUNDERSTORM
         if (condition.isThunder()) {
             if (config.isSyncThunder()) {
                 return TargetWeather.thunder(durationTicks);
             }
-            // If thunder sync is disabled but rain sync is enabled, fallback to rain
             if (config.isSyncRain()) {
                 return TargetWeather.rain(durationTicks);
             }
             return TargetWeather.clear(durationTicks);
         }
 
-        // Snow synchronization (in Minecraft, snow is rendered in cold biomes during rain)
+        // Snowfall synchronization -> RAIN
+        // (In vanilla Minecraft, snowfall occurs in cold biomes during precipitation. Biome temperature determines rain vs snow.)
         if (condition.isSnow()) {
             if (config.isSyncSnow()) {
                 return TargetWeather.rain(durationTicks);
@@ -67,7 +72,7 @@ public class WeatherController {
             return TargetWeather.clear(durationTicks);
         }
 
-        // Precipitation synchronization (rain, drizzle, heavy rain, freezing rain)
+        // Precipitation synchronization (drizzle, rain, heavy rain, freezing rain) -> RAIN
         if (condition.isPrecipitating()) {
             if (config.isSyncRain()) {
                 return TargetWeather.rain(durationTicks);
@@ -75,15 +80,7 @@ public class WeatherController {
             return TargetWeather.clear(durationTicks);
         }
 
-        // Overcast handling
-        if (condition == WeatherCondition.OVERCAST) {
-            if (config.getOvercastHandling() == WeatherConfig.OvercastHandling.DOWNFALL && config.isSyncRain()) {
-                return TargetWeather.rain(durationTicks);
-            }
-            return TargetWeather.clear(durationTicks);
-        }
-
-        // Clear, cloudy, fog
+        // Clear, cloudy, overcast, fog -> CLEAR (cloud cover and fog are not treated as precipitation)
         return TargetWeather.clear(durationTicks);
     }
 

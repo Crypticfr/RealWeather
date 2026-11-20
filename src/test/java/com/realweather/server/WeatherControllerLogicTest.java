@@ -2,7 +2,6 @@ package com.realweather.server;
 
 import com.realweather.config.WeatherConfig;
 import com.realweather.weather.WeatherCondition;
-import net.minecraft.world.level.Level;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -30,28 +29,39 @@ class WeatherControllerLogicTest {
     }
 
     @Test
-    @DisplayName("Verify target weather calculations for CLEAR and CLOUDY")
-    void testClearAndCloudyConditions() {
+    @DisplayName("Verify target weather calculations for CLEAR, CLOUDY, OVERCAST and FOG map to CLEAR")
+    void testNonPrecipitatingConditionsMapToClear() {
         WeatherConfig config = new WeatherConfig();
         int duration = 24000;
 
+        // Clear
         WeatherController.TargetWeather clearTarget = WeatherController.calculateTargetWeather(WeatherCondition.CLEAR, config, duration);
         assertEquals(24000, clearTarget.clearTime());
         assertEquals(0, clearTarget.weatherTime());
         assertFalse(clearTarget.raining());
         assertFalse(clearTarget.thundering());
 
+        // Cloudy (never precipitation)
         WeatherController.TargetWeather cloudyTarget = WeatherController.calculateTargetWeather(WeatherCondition.CLOUDY, config, duration);
         assertFalse(cloudyTarget.raining());
         assertFalse(cloudyTarget.thundering());
+        assertEquals(24000, cloudyTarget.clearTime());
 
+        // Overcast (cloud cover is never precipitation)
+        WeatherController.TargetWeather overcastTarget = WeatherController.calculateTargetWeather(WeatherCondition.OVERCAST, config, duration);
+        assertFalse(overcastTarget.raining());
+        assertFalse(overcastTarget.thundering());
+        assertEquals(24000, overcastTarget.clearTime());
+
+        // Fog (fog is never precipitation)
         WeatherController.TargetWeather fogTarget = WeatherController.calculateTargetWeather(WeatherCondition.FOG, config, duration);
         assertFalse(fogTarget.raining());
         assertFalse(fogTarget.thundering());
+        assertEquals(24000, fogTarget.clearTime());
     }
 
     @Test
-    @DisplayName("Verify target weather calculations for RAIN and HEAVY_RAIN")
+    @DisplayName("Verify target weather calculations for RAIN, DRIZZLE, HEAVY_RAIN and FREEZING_RAIN map to RAIN")
     void testRainConditions() {
         WeatherConfig config = new WeatherConfig();
         int duration = 24000;
@@ -62,9 +72,17 @@ class WeatherControllerLogicTest {
         assertTrue(rainTarget.raining());
         assertFalse(rainTarget.thundering());
 
+        WeatherController.TargetWeather drizzleTarget = WeatherController.calculateTargetWeather(WeatherCondition.DRIZZLE, config, duration);
+        assertTrue(drizzleTarget.raining());
+        assertFalse(drizzleTarget.thundering());
+
         WeatherController.TargetWeather heavyRainTarget = WeatherController.calculateTargetWeather(WeatherCondition.HEAVY_RAIN, config, duration);
         assertTrue(heavyRainTarget.raining());
         assertFalse(heavyRainTarget.thundering());
+
+        WeatherController.TargetWeather freezingRainTarget = WeatherController.calculateTargetWeather(WeatherCondition.FREEZING_RAIN, config, duration);
+        assertTrue(freezingRainTarget.raining());
+        assertFalse(freezingRainTarget.thundering());
 
         // When rain sync is disabled
         config.setSyncRain(false);
@@ -74,7 +92,7 @@ class WeatherControllerLogicTest {
     }
 
     @Test
-    @DisplayName("Verify target weather calculations for THUNDERSTORM")
+    @DisplayName("Verify target weather calculations for THUNDERSTORM map to THUNDERSTORM")
     void testThunderstormConditions() {
         WeatherConfig config = new WeatherConfig();
         int duration = 24000;
@@ -98,12 +116,12 @@ class WeatherControllerLogicTest {
     }
 
     @Test
-    @DisplayName("Verify target weather calculations for SNOW")
+    @DisplayName("Verify target weather calculations for SNOW map to vanilla RAIN state")
     void testSnowConditions() {
         WeatherConfig config = new WeatherConfig();
         int duration = 24000;
 
-        // Snow enables rain in Minecraft (rendered as snow in cold biomes)
+        // In vanilla Minecraft, snowfall occurs during precipitation in cold biomes
         WeatherController.TargetWeather snowTarget = WeatherController.calculateTargetWeather(WeatherCondition.SNOW, config, duration);
         assertTrue(snowTarget.raining());
         assertFalse(snowTarget.thundering());
@@ -112,28 +130,6 @@ class WeatherControllerLogicTest {
         config.setSyncSnow(false);
         WeatherController.TargetWeather noSnowTarget = WeatherController.calculateTargetWeather(WeatherCondition.SNOW, config, duration);
         assertFalse(noSnowTarget.raining());
-    }
-
-    @Test
-    @DisplayName("Verify target weather calculations for OVERCAST handling")
-    void testOvercastHandling() {
-        WeatherConfig config = new WeatherConfig();
-        int duration = 24000;
-
-        // Default: RAIN_ONLY (overcast without precipitation does not trigger rain)
-        config.setOvercastHandling(WeatherConfig.OvercastHandling.RAIN_ONLY);
-        WeatherController.TargetWeather defaultOvercast = WeatherController.calculateTargetWeather(WeatherCondition.OVERCAST, config, duration);
-        assertFalse(defaultOvercast.raining());
-
-        // DOWNFALL (overcast triggers rain)
-        config.setOvercastHandling(WeatherConfig.OvercastHandling.DOWNFALL);
-        WeatherController.TargetWeather downfallOvercast = WeatherController.calculateTargetWeather(WeatherCondition.OVERCAST, config, duration);
-        assertTrue(downfallOvercast.raining());
-
-        // NONE (overcast does not trigger rain)
-        config.setOvercastHandling(WeatherConfig.OvercastHandling.NONE);
-        WeatherController.TargetWeather noneOvercast = WeatherController.calculateTargetWeather(WeatherCondition.OVERCAST, config, duration);
-        assertFalse(noneOvercast.raining());
     }
 
     @Test

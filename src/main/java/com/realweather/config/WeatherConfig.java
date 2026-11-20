@@ -3,12 +3,6 @@ package com.realweather.config;
 import java.util.Objects;
 
 public class WeatherConfig {
-    public enum OvercastHandling {
-        NONE,
-        DOWNFALL,
-        RAIN_ONLY
-    }
-
     private boolean enabled = true;
     private String weatherProvider = "open-meteo";
     private String locationName = "London, United Kingdom";
@@ -18,7 +12,6 @@ public class WeatherConfig {
     private boolean syncRain = true;
     private boolean syncThunder = true;
     private boolean syncSnow = true;
-    private OvercastHandling overcastHandling = OvercastHandling.RAIN_ONLY;
 
     private int apiTimeoutSeconds = 10;
     private int retryIntervalSeconds = 60;
@@ -35,11 +28,11 @@ public class WeatherConfig {
         if (weatherProvider == null || weatherProvider.isBlank()) {
             weatherProvider = "open-meteo";
         }
-        if (latitude < -90.0 || latitude > 90.0) {
-            latitude = Math.max(-90.0, Math.min(90.0, latitude));
+        if (Double.isNaN(latitude) || Double.isInfinite(latitude) || latitude < -90.0 || latitude > 90.0) {
+            latitude = (Double.isNaN(latitude) || Double.isInfinite(latitude)) ? 0.0 : Math.max(-90.0, Math.min(90.0, latitude));
         }
-        if (longitude < -180.0 || longitude > 180.0) {
-            longitude = Math.max(-180.0, Math.min(180.0, longitude));
+        if (Double.isNaN(longitude) || Double.isInfinite(longitude) || longitude < -180.0 || longitude > 180.0) {
+            longitude = (Double.isNaN(longitude) || Double.isInfinite(longitude)) ? 0.0 : Math.max(-180.0, Math.min(180.0, longitude));
         }
         if (updateIntervalMinutes < 1) {
             updateIntervalMinutes = 15;
@@ -52,9 +45,6 @@ public class WeatherConfig {
         }
         if (cacheDurationMinutes < 1) {
             cacheDurationMinutes = 30;
-        }
-        if (overcastHandling == null) {
-            overcastHandling = OvercastHandling.RAIN_ONLY;
         }
     }
 
@@ -130,14 +120,6 @@ public class WeatherConfig {
         this.syncSnow = syncSnow;
     }
 
-    public OvercastHandling getOvercastHandling() {
-        return overcastHandling;
-    }
-
-    public void setOvercastHandling(OvercastHandling overcastHandling) {
-        this.overcastHandling = Objects.requireNonNullElse(overcastHandling, OvercastHandling.RAIN_ONLY);
-    }
-
     public int getApiTimeoutSeconds() {
         return apiTimeoutSeconds;
     }
@@ -168,5 +150,31 @@ public class WeatherConfig {
 
     public void setDebugLogging(boolean debugLogging) {
         this.debugLogging = debugLogging;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof WeatherConfig that)) return false;
+        return enabled == that.enabled &&
+                Double.compare(that.latitude, latitude) == 0 &&
+                Double.compare(that.longitude, longitude) == 0 &&
+                updateIntervalMinutes == that.updateIntervalMinutes &&
+                syncRain == that.syncRain &&
+                syncThunder == that.syncThunder &&
+                syncSnow == that.syncSnow &&
+                apiTimeoutSeconds == that.apiTimeoutSeconds &&
+                retryIntervalSeconds == that.retryIntervalSeconds &&
+                cacheDurationMinutes == that.cacheDurationMinutes &&
+                debugLogging == that.debugLogging &&
+                Objects.equals(weatherProvider, that.weatherProvider) &&
+                Objects.equals(locationName, that.locationName);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(enabled, weatherProvider, locationName, latitude, longitude,
+                updateIntervalMinutes, syncRain, syncThunder, syncSnow,
+                apiTimeoutSeconds, retryIntervalSeconds, cacheDurationMinutes, debugLogging);
     }
 }

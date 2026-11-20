@@ -16,8 +16,14 @@ class WeatherSnapshotTest {
 
         // Case 1: unavailable values (null)
         WeatherSnapshot snapshotWithNulls = new WeatherSnapshot(
+                51.5074, -0.1278,
                 0, 15.0, null, null, 0.0, 0.0, 0.0, 0.0, 10.0, null, null, now, "UTC", now
         );
+
+        assertEquals(51.5074, snapshotWithNulls.getLatitude(), 0.0001);
+        assertEquals(-0.1278, snapshotWithNulls.getLongitude(), 0.0001);
+        assertTrue(snapshotWithNulls.matchesLocation(51.5074, -0.1278));
+        assertFalse(snapshotWithNulls.matchesLocation(48.8566, 2.3522));
 
         assertTrue(snapshotWithNulls.getApparentTemperature().isEmpty());
         assertTrue(snapshotWithNulls.getRelativeHumidity().isEmpty());
@@ -29,6 +35,8 @@ class WeatherSnapshotTest {
                 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, now, "UTC", now
         );
 
+        assertEquals(0.0, snapshotWithZeros.getLatitude());
+        assertEquals(0.0, snapshotWithZeros.getLongitude());
         assertTrue(snapshotWithZeros.getApparentTemperature().isPresent());
         assertEquals(0.0, snapshotWithZeros.getApparentTemperature().getAsDouble());
 
@@ -43,10 +51,31 @@ class WeatherSnapshotTest {
     }
 
     @Test
-    @DisplayName("Verify validation rejects negative precipitation or weather codes")
+    @DisplayName("Verify validation rejects NaN, infinite, out-of-range coordinates, negative precipitation or weather codes")
     void testValidationRejectsInvalidValues() {
         Instant now = Instant.now();
 
+        // NaN and Infinite coordinates
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                Double.NaN, 0.0, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                0.0, Double.NaN, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                Double.POSITIVE_INFINITY, 0.0, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                0.0, Double.NEGATIVE_INFINITY, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                95.0, 0.0, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
+                0.0, -185.0, 0, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
+        ));
+
+        // Weather codes and precip
         assertThrows(IllegalArgumentException.class, () -> new WeatherSnapshot(
                 -1, 10.0, null, null, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, now, "UTC", now
         ));

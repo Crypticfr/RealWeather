@@ -25,7 +25,6 @@ class WeatherConfigTest {
         assertTrue(config.isSyncRain());
         assertTrue(config.isSyncThunder());
         assertTrue(config.isSyncSnow());
-        assertEquals(WeatherConfig.OvercastHandling.RAIN_ONLY, config.getOvercastHandling());
         assertEquals(10, config.getApiTimeoutSeconds());
         assertEquals(60, config.getRetryIntervalSeconds());
         assertEquals(30, config.getCacheDurationMinutes());
@@ -52,6 +51,27 @@ class WeatherConfigTest {
     }
 
     @Test
+    @DisplayName("Verify NaN and Infinite coordinates are sanitized to valid values")
+    void testSanitizesNaNAndInfiniteCoordinates() {
+        WeatherConfig config = new WeatherConfig();
+        config.setLatitude(Double.NaN);
+        config.setLongitude(Double.POSITIVE_INFINITY);
+        config.validate();
+
+        assertFalse(Double.isNaN(config.getLatitude()));
+        assertFalse(Double.isInfinite(config.getLongitude()));
+        assertEquals(0.0, config.getLatitude(), 0.0001);
+        assertEquals(0.0, config.getLongitude(), 0.0001);
+
+        config.setLatitude(Double.NEGATIVE_INFINITY);
+        config.setLongitude(Double.NaN);
+        config.validate();
+
+        assertEquals(0.0, config.getLatitude(), 0.0001);
+        assertEquals(0.0, config.getLongitude(), 0.0001);
+    }
+
+    @Test
     @DisplayName("Verify update interval and timeout constraints")
     void testIntervalValidation() {
         WeatherConfig config = new WeatherConfig();
@@ -75,7 +95,6 @@ class WeatherConfigTest {
         original.setLatitude(35.6764);
         original.setLongitude(139.6500);
         original.setUpdateIntervalMinutes(30);
-        original.setOvercastHandling(WeatherConfig.OvercastHandling.DOWNFALL);
         original.setDebugLogging(true);
 
         String json = gson.toJson(original);
@@ -90,7 +109,6 @@ class WeatherConfigTest {
         assertEquals(35.6764, deserialized.getLatitude(), 0.0001);
         assertEquals(139.6500, deserialized.getLongitude(), 0.0001);
         assertEquals(30, deserialized.getUpdateIntervalMinutes());
-        assertEquals(WeatherConfig.OvercastHandling.DOWNFALL, deserialized.getOvercastHandling());
         assertTrue(deserialized.isDebugLogging());
     }
 }

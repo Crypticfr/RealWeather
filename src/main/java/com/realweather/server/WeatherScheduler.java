@@ -18,7 +18,6 @@ public class WeatherScheduler {
     private volatile MinecraftServer currentServer;
     private volatile boolean isRunning = false;
     private long tickCounter = 0;
-    private long lastSyncTick = -1;
     private long lastAttemptTick = -1;
 
     public WeatherScheduler(WeatherManager weatherManager) {
@@ -29,7 +28,6 @@ public class WeatherScheduler {
         this.currentServer = server;
         this.isRunning = true;
         this.tickCounter = 0;
-        this.lastSyncTick = -1;
         this.lastAttemptTick = -1;
 
         LOGGER.info("WeatherScheduler started. Performing initial synchronization...");
@@ -40,6 +38,7 @@ public class WeatherScheduler {
         LOGGER.info("WeatherScheduler stopping...");
         this.isRunning = false;
         this.currentServer = null;
+        this.weatherManager.invalidateInFlight();
     }
 
     public void onServerTick(MinecraftServer server) {
@@ -66,10 +65,8 @@ public class WeatherScheduler {
             return;
         }
 
-        // Buffer guard: ensure Minecraft's internal timer does not expire unexpectedly before next sync
-        if (tickCounter % 1200 == 0) { // check every minute
-            refreshTimerBufferIfNeeded(server, config);
-        }
+        // Periodic consistency enforcement (runs once every 20 Overworld ticks)
+        WeatherEnforcementHandler.checkAndEnforce(server);
     }
 
     public void triggerSync(boolean force) {
@@ -78,34 +75,7 @@ public class WeatherScheduler {
         }
         lastAttemptTick = tickCounter;
         WeatherConfig config = RealWeather.getInstance().getConfigManager().getConfig();
-        weatherManager.syncWeather(currentServer, config, force)
-                .thenAccept(state -> {
-                    if (state.getSyncStatus() == WeatherState.SyncStatus.SUCCESS) {
-                        lastSyncTick = tickCounter;
-                    }
-                });
-    }
-
-    private void refreshTimerBufferIfNeeded(MinecraftServer server, WeatherConfig config) {
-        try {
-            WeatherData data = server.getWeatherData();
-            if (data == null) return;
-
-            int clearTime = data.getClearWeatherTime();
-            int rainTime = data.getRainTime();
-
-            // If timer has dropped low, re-apply duration without flipping weather state
-            if ((data.isRaining() && rainTime > 0 && rainTime < LOW_TIMER_THRESHOLD_TICKS) ||
-                    (!data.isRaining() && clearTime > 0 && clearTime < LOW_TIMER_THRESHOLD_TICKS)) {
-                weatherManager.getWeatherController().applyWeather(
-                        server,
-                        weatherManager.getWeatherState().getCurrentAppliedCondition(),
-                        config
-                );
-            }
-        } catch (Exception e) {
-            LOGGER.debug("Error checking weather timer buffer: {}", e.getMessage());
-        }
+        weatherManager.syncWeather(currentServer, config, force);
     }
 
     public boolean isRunning() {

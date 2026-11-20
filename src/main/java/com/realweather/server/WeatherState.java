@@ -11,7 +11,8 @@ import java.util.Optional;
 public class WeatherState {
     public enum SyncStatus {
         IDLE,
-        SYNCING,
+        FETCHING,
+        FETCHED,
         SUCCESS,
         ERROR
     }
@@ -19,29 +20,43 @@ public class WeatherState {
     private volatile WeatherSnapshot latestSnapshot;
     private volatile WeatherCondition currentAppliedCondition = WeatherCondition.CLEAR;
     private volatile WeatherCondition desiredCondition = WeatherCondition.CLEAR;
-    private volatile Instant lastSyncTimestamp;
+    private volatile Instant lastFetchTimestamp;
+    private volatile Instant lastApplyTimestamp;
     private volatile SyncStatus syncStatus = SyncStatus.IDLE;
     private volatile String lastError;
 
     public WeatherState() {
     }
 
-    public synchronized void updateSuccess(WeatherSnapshot snapshot, WeatherCondition desired, Instant syncTime) {
+    public synchronized void recordFetching() {
+        this.syncStatus = SyncStatus.FETCHING;
+    }
+
+    public synchronized void recordFetched(WeatherSnapshot snapshot, WeatherCondition desired, Instant fetchTime) {
         this.latestSnapshot = Objects.requireNonNull(snapshot, "snapshot cannot be null");
         this.desiredCondition = Objects.requireNonNull(desired, "desired condition cannot be null");
-        this.lastSyncTimestamp = Objects.requireNonNull(syncTime, "syncTime cannot be null");
-        this.syncStatus = SyncStatus.SUCCESS;
+        this.lastFetchTimestamp = Objects.requireNonNull(fetchTime, "fetchTime cannot be null");
+        this.syncStatus = SyncStatus.FETCHED;
         this.lastError = null;
+    }
+
+    public synchronized void recordApplied(WeatherCondition applied, Instant applyTime) {
+        this.currentAppliedCondition = Objects.requireNonNull(applied, "applied condition cannot be null");
+        this.lastApplyTimestamp = Objects.requireNonNull(applyTime, "applyTime cannot be null");
+        if (this.syncStatus != SyncStatus.ERROR) {
+            this.syncStatus = SyncStatus.SUCCESS;
+        }
+    }
+
+    public synchronized void updateSuccess(WeatherSnapshot snapshot, WeatherCondition desired, Instant syncTime) {
+        recordFetched(snapshot, desired, syncTime);
+        recordApplied(desired, syncTime);
     }
 
     public synchronized void updateFromCache(WeatherSnapshot snapshot, WeatherCondition desired) {
         this.latestSnapshot = Objects.requireNonNull(snapshot, "snapshot cannot be null");
         this.desiredCondition = Objects.requireNonNull(desired, "desired condition cannot be null");
-        this.lastSyncTimestamp = snapshot.getFetchTime();
-    }
-
-    public synchronized void recordApplied(WeatherCondition applied) {
-        this.currentAppliedCondition = Objects.requireNonNull(applied, "applied condition cannot be null");
+        this.lastFetchTimestamp = snapshot.getFetchTime();
     }
 
     public synchronized void recordError(String errorMessage) {
@@ -49,15 +64,27 @@ public class WeatherState {
         this.lastError = errorMessage;
     }
 
-    public synchronized void setSyncing() {
-        this.syncStatus = SyncStatus.SYNCING;
+    public boolean hasValidAppliedWeather() {
+        return latestSnapshot != null && lastApplyTimestamp != null;
+    }
+
+    public boolean matchesLocation(double lat, double lon) {
+        return latestSnapshot != null && latestSnapshot.matchesLocation(lat, lon);
+    }
+
+    public Optional<WeatherSnapshot> getLatestSnapshotForLocation(double lat, double lon) {
+        if (latestSnapshot != null && latestSnapshot.matchesLocation(lat, lon)) {
+            return Optional.of(latestSnapshot);
+        }
+        return Optional.empty();
     }
 
     public boolean isStale(Duration maxAge, Instant now) {
-        if (lastSyncTimestamp == null) {
+        Instant ref = lastApplyTimestamp != null ? lastApplyTimestamp : lastFetchTimestamp;
+        if (ref == null) {
             return true;
         }
-        return lastSyncTimestamp.plus(maxAge).isBefore(now);
+        return ref.plus(maxAge).isBefore(now);
     }
 
     public Optional<WeatherSnapshot> getLatestSnapshot() {
@@ -73,7 +100,15 @@ public class WeatherState {
     }
 
     public Optional<Instant> getLastSyncTimestamp() {
-        return Optional.ofNullable(lastSyncTimestamp);
+        return Optional.ofNullable(lastApplyTimestamp != null ? lastApplyTimestamp : lastFetchTimestamp);
+    }
+
+    public Optional<Instant> getLastFetchTimestamp() {
+        return Optional.ofNullable(lastFetchTimestamp);
+    }
+
+    public Optional<Instant> getLastApplyTimestamp() {
+        return Optional.ofNullable(lastApplyTimestamp);
     }
 
     public SyncStatus getSyncStatus() {

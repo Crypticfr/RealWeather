@@ -58,22 +58,41 @@ public class OpenMeteoProvider implements WeatherProvider {
 
     @Override
     public CompletableFuture<WeatherSnapshot> getCurrentWeather(double latitude, double longitude) {
+        return getCurrentWeather(latitude, longitude, false);
+    }
+
+    @Override
+    public CompletableFuture<WeatherSnapshot> getCurrentWeather(double latitude, double longitude, boolean forceRefresh) {
         try {
             WeatherProvider.validateCoordinates(latitude, longitude);
         } catch (IllegalArgumentException e) {
             return CompletableFuture.failedFuture(e);
         }
 
-        Optional<WeatherSnapshot> fresh = cache.getIfFresh(latitude, longitude, cacheDuration);
-        if (fresh.isPresent()) {
-            return CompletableFuture.completedFuture(fresh.get());
+        if (!forceRefresh) {
+            Optional<WeatherSnapshot> fresh = cache.getIfFresh(latitude, longitude, cacheDuration);
+            if (fresh.isPresent()) {
+                return CompletableFuture.completedFuture(fresh.get());
+            }
         }
 
         WeatherCache.CoordinateKey key = WeatherCache.CoordinateKey.of(latitude, longitude);
+        if (forceRefresh) {
+            CompletableFuture<WeatherSnapshot> future = executeRequest(latitude, longitude);
+            inflightRequests.put(key, future);
+            future.whenComplete((snapshot, err) -> {
+                inflightRequests.remove(key, future);
+                if (snapshot != null) {
+                    cache.put(latitude, longitude, snapshot);
+                }
+            });
+            return future;
+        }
+
         return inflightRequests.computeIfAbsent(key, k -> {
             CompletableFuture<WeatherSnapshot> future = executeRequest(latitude, longitude);
             future.whenComplete((snapshot, err) -> {
-                inflightRequests.remove(k);
+                inflightRequests.remove(k, future);
                 if (snapshot != null) {
                     cache.put(latitude, longitude, snapshot);
                 }
@@ -118,7 +137,7 @@ public class OpenMeteoProvider implements WeatherProvider {
                     }
 
                     try {
-                        WeatherSnapshot snapshot = parseWeatherResponse(response.body(), Instant.now());
+                        WeatherSnapshot snapshot = parseWeatherResponse(response.body(), latitude, longitude, Instant.now());
                         return CompletableFuture.completedFuture(snapshot);
                     } catch (Exception e) {
                         LOGGER.error("Failed to parse Open-Meteo response: {}", e.getMessage());
@@ -127,7 +146,7 @@ public class OpenMeteoProvider implements WeatherProvider {
                 });
     }
 
-    private WeatherSnapshot parseWeatherResponse(String body, Instant fetchTime) throws WeatherApiException {
+    private WeatherSnapshot parseWeatherResponse(String body, double latitude, double longitude, Instant fetchTime) throws WeatherApiException {
         if (body == null || body.isBlank()) {
             throw new WeatherApiException("Empty response body from Open-Meteo");
         }
@@ -202,6 +221,8 @@ public class OpenMeteoProvider implements WeatherProvider {
                 ? root.get("timezone").getAsString() : "UTC";
 
         return new WeatherSnapshot(
+                latitude,
+                longitude,
                 weatherCode,
                 temperature,
                 apparentTemperature,

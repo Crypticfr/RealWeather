@@ -3,21 +3,19 @@
   "id": "realweather",
   "version": "${version}",
   "name": "RealWeather",
-  "description": "Synchronizes Minecraft Overworld weather with real-world weather conditions.",
+  "description": "Lightweight server-side mod that synchronizes Minecraft Overworld weather with real-world weather conditions.",
   "authors": [
-    "RealWeather Team"
+    "Crypticfr"
   ],
   "contact": {
-    "sources": "https://github.com/realweather/realweather"
+    "homepage": "https://github.com/Crypticfr/RealWeather",
+    "sources": "https://github.com/Crypticfr/RealWeather"
   },
   "license": "MIT",
   "environment": "*",
   "entrypoints": {
     "main": [
       "com.realweather.RealWeather"
-    ],
-    "client": [
-      "com.realweather.client.RealWeatherClient"
     ]
   },
   "depends": {

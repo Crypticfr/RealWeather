@@ -1,6 +1,5 @@
 package com.realweather.server;
 
-import com.realweather.RealWeather;
 import com.realweather.api.WeatherProvider;
 import com.realweather.api.WeatherSnapshot;
 import com.realweather.config.WeatherConfig;
@@ -10,12 +9,12 @@ import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class WeatherManager {
     private static final Logger LOGGER = LoggerFactory.getLogger(WeatherManager.class);
@@ -24,11 +23,22 @@ public class WeatherManager {
     private final WeatherController weatherController;
     private final WeatherState weatherState;
     private final AtomicBoolean isSyncing = new AtomicBoolean(false);
+    private final AtomicLong syncGeneration = new AtomicLong(0);
 
     public WeatherManager(WeatherProvider weatherProvider, WeatherController weatherController) {
         this.weatherProvider = Objects.requireNonNull(weatherProvider, "weatherProvider cannot be null");
         this.weatherController = Objects.requireNonNull(weatherController, "weatherController cannot be null");
         this.weatherState = new WeatherState();
+    }
+
+    public long invalidateInFlight() {
+        long newGen = syncGeneration.incrementAndGet();
+        LOGGER.debug("Invalidated in-flight weather requests, new generation: {}", newGen);
+        return newGen;
+    }
+
+    public long getSyncGeneration() {
+        return syncGeneration.get();
     }
 
     public CompletableFuture<WeatherState> syncWeather(MinecraftServer server, WeatherConfig config, boolean forceRefresh) {
@@ -42,45 +52,97 @@ public class WeatherManager {
             return CompletableFuture.completedFuture(weatherState);
         }
 
-        weatherState.setSyncing();
-        double lat = config.getLatitude();
-        double lon = config.getLongitude();
+        final long currentGen = syncGeneration.incrementAndGet();
+        final double requestLat = config.getLatitude();
+        final double requestLon = config.getLongitude();
 
-        return weatherProvider.getCurrentWeather(lat, lon)
+        weatherState.recordFetching();
+
+        return weatherProvider.getCurrentWeather(requestLat, requestLon, forceRefresh)
                 .thenApply(snapshot -> {
+                    if (currentGen != syncGeneration.get()) {
+                        LOGGER.debug("Dropping stale weather response (gen {} != current {})", currentGen, syncGeneration.get());
+                        return weatherState;
+                    }
+
+                    if (!config.isEnabled()) {
+                        LOGGER.debug("RealWeather was disabled while API request was in flight. Dropping response.");
+                        return weatherState;
+                    }
+
+                    if (config.getLatitude() != requestLat || config.getLongitude() != requestLon) {
+                        LOGGER.debug("Configuration coordinates changed while API request was in flight. Dropping response.");
+                        return weatherState;
+                    }
+
+                    if (!snapshot.matchesLocation(requestLat, requestLon)) {
+                        LOGGER.warn("Received weather snapshot for different location [lat {}, lon {}], expected [{}, {}]. Dropping response.",
+                                snapshot.getLatitude(), snapshot.getLongitude(), requestLat, requestLon);
+                        return weatherState;
+                    }
+
                     WeatherCondition desired = WeatherMapper.mapSnapshot(snapshot);
-                    weatherState.updateSuccess(snapshot, desired, Instant.now());
+                    Instant fetchTime = Instant.now();
+                    weatherState.recordFetched(snapshot, desired, fetchTime);
 
                     if (server != null) {
                         server.execute(() -> {
-                            weatherController.applyWeather(server, desired, config);
-                            weatherState.recordApplied(desired);
+                            if (currentGen != syncGeneration.get() || !config.isEnabled() || server.isStopped()) {
+                                LOGGER.debug("Skipping weather application on server thread: generation changed or server stopping");
+                                return;
+                            }
+                            try {
+                                weatherController.applyWeather(server, desired, config);
+                                weatherState.recordApplied(desired, Instant.now());
+                            } catch (Exception e) {
+                                LOGGER.error("Failed to apply weather on server thread: {}", e.getMessage(), e);
+                                weatherState.recordError("Failed to apply weather on server thread: " + e.getMessage());
+                            }
                         });
+                    } else {
+                        // Headless / unit test mode without MinecraftServer dispatch
+                        weatherState.recordApplied(desired, fetchTime);
                     }
 
                     LOGGER.info("Weather synchronized successfully for {} [lat: {}, lon: {}]: condition={}, temp={}°C",
-                            config.getLocationName(), lat, lon, desired, snapshot.getTemperature());
+                            config.getLocationName(), requestLat, requestLon, desired, snapshot.getTemperature());
                     return weatherState;
                 })
                 .exceptionally(throwable -> {
+                    if (currentGen != syncGeneration.get()) {
+                        LOGGER.debug("Ignoring error from obsolete weather request (gen {} != current {})", currentGen, syncGeneration.get());
+                        return weatherState;
+                    }
+
                     String errorMsg = throwable.getCause() != null ? throwable.getCause().getMessage() : throwable.getMessage();
                     LOGGER.warn("Weather synchronization failed for {}: {}. Preserving current world weather.",
                             config.getLocationName(), errorMsg);
                     weatherState.recordError(errorMsg);
 
-                    // Check if stale cached weather is available when no current snapshot exists
-                    if (weatherState.getLatestSnapshot().isEmpty()) {
-                        Optional<WeatherSnapshot> cached = weatherProvider.getCachedWeather(lat, lon);
-                        cached.ifPresent(snapshot -> {
-                            WeatherCondition desired = WeatherMapper.mapSnapshot(snapshot);
-                            weatherState.updateFromCache(snapshot, desired);
+                    // If active state has no valid data for the requested location, try cached data for this location
+                    if (!weatherState.matchesLocation(requestLat, requestLon)) {
+                        Optional<WeatherSnapshot> cached = weatherProvider.getCachedWeather(requestLat, requestLon);
+                        cached.filter(s -> s.matchesLocation(requestLat, requestLon)).ifPresent(cachedSnapshot -> {
+                            WeatherCondition desired = WeatherMapper.mapSnapshot(cachedSnapshot);
+                            weatherState.updateFromCache(cachedSnapshot, desired);
                             if (server != null) {
                                 server.execute(() -> {
-                                    weatherController.applyWeather(server, desired, config);
-                                    weatherState.recordApplied(desired);
+                                    if (currentGen != syncGeneration.get() || !config.isEnabled() || server.isStopped()) {
+                                        return;
+                                    }
+                                    try {
+                                        weatherController.applyWeather(server, desired, config);
+                                        weatherState.recordApplied(desired, Instant.now());
+                                    } catch (Exception e) {
+                                        LOGGER.error("Failed to apply cached weather on server thread: {}", e.getMessage(), e);
+                                        weatherState.recordError("Failed to apply cached weather on server thread: " + e.getMessage());
+                                    }
                                 });
+                            } else {
+                                weatherState.recordApplied(desired, Instant.now());
                             }
-                            LOGGER.info("Applied stale cached weather during API outage: condition={}", desired);
+                            LOGGER.info("Applied stale cached weather for {} during API outage: condition={}",
+                                    config.getLocationName(), desired);
                         });
                     }
 
