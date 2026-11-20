@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "realweather",
+  "version": "${version}",
+  "name": "RealWeather",
+  "description": "Synchronizes Minecraft Overworld weather with real-world weather conditions.",
+  "authors": [
+    "RealWeather Team"
+  ],
+  "contact": {
+    "sources": "https://github.com/realweather/realweather"
+  },
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.realweather.RealWeather"
+    ],
+    "client": [
+      "com.realweather.client.RealWeatherClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.20.1",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
