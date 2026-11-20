@@ -1,15 +1,17 @@
-/.gradle/
-/build/
-/run/
-/config/
-/logs/
-/out/
+
+.gradle/
+build/
+out/
+run/
 .idea/
 *.iml
-*.ipr
-*.iws
-.project
-.classpath
-.settings/
-.vscode/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
+
+# Local configuration
+config/realweather.json
